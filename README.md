@@ -50,11 +50,11 @@ In order to preprocess the datasets for running EHR-M-GAN, please refer to the f
 To train the model(s) in the paper, simply run this command:
 
 ```
-python main_train.py --dataset mimic --num_pre_epochs 5000 --num_epochs 8000 --epoch_ckpt_freq 100 
+python main_train.py --dataset mimic --num_pre_epochs 500 --num_epochs 800 --epoch_ckpt_freq 100 
 ```
 
 For training the conditional extension of EHR-M-GAN in the paper, run this command:
 ```
-python main_train.py --dataset mimic --conditional True --num_labels 1 --num_pre_epochs 5000 --num_epochs 8000 --epoch_ckpt_freq 100 
+python main_train.py --dataset mimic --conditional True --num_labels 1 --num_pre_epochs 500 --num_epochs 800 --epoch_ckpt_freq 100 
 ```
 
