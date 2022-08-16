@@ -3,15 +3,15 @@ import warnings
 warnings.filterwarnings("ignore")
 from tensorflow.contrib.layers import l2_regularizer
 from init_state import rnn_init_state
+# from Bilateral_lstm_cell import recurrent_unit_bilateral
 from Bilateral_lstm_class import Bilateral_LSTM_cell, MultilayerCells
 
 class C_VAE_NET(object):
     def __init__(self,
-                 batch_size, time_steps,
-                 dim, z_dim,
-                 enc_size=24, dec_size=24,
-                 enc_layers=3, dec_layers=3,
-                 keep_prob=0.8, l2scale=0.001,
+                 batch_size, time_steps, dim, z_dim,
+                 enc_size, dec_size,
+                 enc_layers, dec_layers,
+                 keep_prob, l2scale,
                  conditional=False, num_labels=0):
 
         self.batch_size = batch_size
@@ -29,6 +29,7 @@ class C_VAE_NET(object):
 
     def build_vae(self, input_data, conditions=None):
         if self.conditional:
+            # cVAE
             assert not self.num_labels == 0
             repeated_encoding = tf.stack([conditions]*self.time_steps, axis=1)
             input_data_cond = tf.concat([input_data, repeated_encoding], axis=-1)
@@ -36,6 +37,7 @@ class C_VAE_NET(object):
         else:
             input_enc = tf.unstack(input_data, axis=1)
 
+        # multicell RNN -----------------------------------------------------
         self.cell_enc = self.buildEncoder()
         self.cell_dec = self.buildDecoder()
         enc_state = self.cell_enc.zero_state(self.batch_size, tf.float32)
@@ -43,7 +45,7 @@ class C_VAE_NET(object):
 
         self.e = tf.random_normal((self.batch_size, self.z_dim))
         self.c, mu, logsigma, sigma, z = [0] * self.time_steps, [0] * self.time_steps, [0] * self.time_steps, \
-                                         [0] * self.time_steps, [0] * self.time_steps 
+                                         [0] * self.time_steps, [0] * self.time_steps  
         w_mu, b_mu, w_sigma, b_sigma, self.w_h_dec, self.b_h_dec = self.buildSampling()
 
         for t in range(self.time_steps):
@@ -62,12 +64,15 @@ class C_VAE_NET(object):
             with tf.variable_scope('Encoder', regularizer=l2_regularizer(self.l2scale), reuse=tf.AUTO_REUSE):
                 h_enc, enc_state = self.cell_enc(tf.concat([input_enc[t], x_hat], 1), enc_state)
 
-            mu[t] = tf.matmul(h_enc, w_mu) + b_mu
-            logsigma[t] = tf.matmul(h_enc, w_sigma) + b_sigma
+            # sampling layer
+            mu[t] = tf.matmul(h_enc, w_mu) + b_mu  
+            logsigma[t] = tf.matmul(h_enc, w_sigma) + b_sigma 
             sigma[t] = tf.exp(logsigma[t])
 
+            #cVAE
             if self.conditional:
                 z[t] = mu[t] + sigma[t] * self.e
+                # conditional information
                 z[t] = tf.concat([z[t], conditions], axis=-1)
             else:
                 z[t] = mu[t] + sigma[t] * self.e
@@ -75,7 +80,7 @@ class C_VAE_NET(object):
             with tf.variable_scope('Decoder', regularizer=l2_regularizer(self.l2scale), reuse=tf.AUTO_REUSE):
                 h_dec, dec_state = self.cell_dec(z[t], dec_state)
 
-            self.c[t] = tf.matmul(h_dec, self.w_h_dec) + self.b_h_dec
+            self.c[t] = tf.nn.sigmoid( tf.matmul(h_dec, self.w_h_dec) + self.b_h_dec )
 
         self.decoded = tf.stack(self.c, axis=1)
 
@@ -91,7 +96,7 @@ class C_VAE_NET(object):
             else:
                 rec_h_dec, rec_dec_state = self.cell_dec(dec_input[t], rec_dec_state)
 
-            rec_decoded[t] = tf.matmul(rec_h_dec, self.w_h_dec) + self.b_h_dec
+            rec_decoded[t] = tf.nn.sigmoid( tf.matmul(rec_h_dec, self.w_h_dec) + self.b_h_dec )
 
         return tf.stack(rec_decoded, axis=1)
 
@@ -102,6 +107,7 @@ class C_VAE_NET(object):
             cell = tf.contrib.rnn.DropoutWrapper(cell, output_keep_prob=self.keep_prob)
             cell_units.append(cell)
 
+        # weight-sharing in the last layer of encoder
         cell = tf.nn.rnn_cell.LSTMCell(self.enc_size, name="Shared_VAE", reuse=tf.AUTO_REUSE)
         cell = tf.contrib.rnn.DropoutWrapper(cell, output_keep_prob=self.keep_prob)
         cell_units.append(cell)
@@ -112,6 +118,7 @@ class C_VAE_NET(object):
     def buildDecoder(self):
         cell_units = []
 
+        # weight-sharing in the first layer of decoder
         cell = tf.nn.rnn_cell.LSTMCell(self.dec_size, name="Shared_VAE", reuse=tf.AUTO_REUSE)
         cell = tf.contrib.rnn.DropoutWrapper(cell, output_keep_prob=self.keep_prob)
         cell_units.append(cell)
@@ -125,11 +132,10 @@ class C_VAE_NET(object):
         return cell_dec
 
     def buildSampling(self):
-        w_mu = self.weight_variable([self.enc_size, self.z_dim], scope_name='Sampling_layer/Shared_VAE', name='w_mu')   
+        w_mu = self.weight_variable([self.enc_size, self.z_dim], scope_name='Sampling_layer/Shared_VAE', name='w_mu') 
         b_mu = self.bias_variable([self.z_dim], scope_name='Sampling_layer/Shared_VAE', name='b_mu')
         w_sigma = self.weight_variable([self.enc_size, self.z_dim], scope_name='Sampling_layer/Shared_VAE', name='w_sigma')
         b_sigma = self.bias_variable([self.z_dim], scope_name='Sampling_layer/Shared_VAE', name='b_sigma')
-
         w_h_dec = self.weight_variable([self.dec_size, self.dim], scope_name='Decoder/Linear/Continuous_VAE', name='w_h_dec')
         b_h_dec = self.bias_variable([self.dim], scope_name='Decoder/Linear/Continuous_VAE', name='b_h_dec')
 
@@ -151,9 +157,9 @@ class D_VAE_NET(object):
     def __init__(self,
                  batch_size, time_steps,
                  dim, z_dim,
-                 enc_size=24, dec_size=24,
-                 enc_layers=3, dec_layers=3,
-                 keep_prob=0.8, l2scale=0.001,
+                 enc_size, dec_size,
+                 enc_layers, dec_layers,
+                 keep_prob, l2scale,
                  conditional=False, num_labels=0):
 
         self.batch_size = batch_size
@@ -171,6 +177,7 @@ class D_VAE_NET(object):
 
     def build_vae(self, input_data, conditions=None):
         if self.conditional:
+            # cVAE
             assert not self.num_labels == 0
             repeated_encoding = tf.stack([conditions] * self.time_steps, axis=1)
             input_data_cond = tf.concat([input_data, repeated_encoding], axis=-1)
@@ -178,12 +185,13 @@ class D_VAE_NET(object):
         else:
             input_enc = tf.unstack(input_data, axis=1)
 
+        # # multicell RNN -----------------------------------------------------
         self.cell_enc = self.buildEncoder()
         self.cell_dec = self.buildDecoder()
         enc_state = self.cell_enc.zero_state(self.batch_size, tf.float32)
         dec_state = self.cell_dec.zero_state(self.batch_size, tf.float32)
 
-        self.e = tf.random_normal((self.batch_size, self.z_dim))
+        self.e = tf.random_normal((self.batch_size, self.z_dim)) 
         self.c, mu, logsigma, sigma, z = [None] * self.time_steps, [None] * self.time_steps, \
                                          [None] * self.time_steps, [None] * self.time_steps, \
                                          [None] * self.time_steps
@@ -206,19 +214,23 @@ class D_VAE_NET(object):
             with tf.variable_scope('Encoder', regularizer=l2_regularizer(self.l2scale), reuse=tf.AUTO_REUSE):
                 h_enc, enc_state = self.cell_enc(tf.concat([input_enc[t], x_hat], 1), enc_state)
 
-            mu[t] = tf.matmul(h_enc, w_mu) + b_mu 
-            logsigma[t] = tf.matmul(h_enc, w_sigma) + b_sigma 
+            # sampling layer
+            mu[t] = tf.matmul(h_enc, w_mu) + b_mu  # [z_size]
+            logsigma[t] = tf.matmul(h_enc, w_sigma) + b_sigma  # [z_size]
             sigma[t] = tf.exp(logsigma[t])
 
+            # cVAE
             if self.conditional:
                 z[t] = mu[t] + sigma[t] * self.e
+                # conditional information
                 z[t] = tf.concat([z[t], conditions], axis=-1)
             else:
                 z[t] = mu[t] + sigma[t] * self.e
 
             with tf.variable_scope('Decoder', regularizer=l2_regularizer(self.l2scale), reuse=tf.AUTO_REUSE):
                 h_dec, dec_state = self.cell_dec(z[t], dec_state)
-            self.c[t] = tf.matmul(h_dec, self.w_h_dec) + self.b_h_dec
+                
+            self.c[t] =  tf.nn.sigmoid( tf.matmul(h_dec, self.w_h_dec) + self.b_h_dec )
 
         self.decoded = tf.stack(self.c, axis=1)
 
@@ -234,7 +246,7 @@ class D_VAE_NET(object):
             else:
                 rec_h_dec, rec_dec_state = self.cell_dec(dec_input[t], rec_dec_state)
 
-            rec_decoded[t] = tf.matmul(rec_h_dec, self.w_h_dec) + self.b_h_dec
+            rec_decoded[t] =  tf.nn.sigmoid( tf.matmul(rec_h_dec, self.w_h_dec) + self.b_h_dec )
 
         return tf.stack(rec_decoded, axis=1)
 
@@ -246,6 +258,7 @@ class D_VAE_NET(object):
             cell = tf.contrib.rnn.DropoutWrapper(cell, output_keep_prob=self.keep_prob)
             cell_units.append(cell)
 
+        # weight sharing in the last layer of encoder
         cell = tf.nn.rnn_cell.LSTMCell(self.enc_size, name="Shared_VAE", reuse=tf.AUTO_REUSE)
         cell = tf.contrib.rnn.DropoutWrapper(cell, output_keep_prob=self.keep_prob)
         cell_units.append(cell)
@@ -256,6 +269,7 @@ class D_VAE_NET(object):
     def buildDecoder(self):
         cell_units = []
 
+        # weight sharing in the first layer of decoder
         cell = tf.nn.rnn_cell.LSTMCell(self.dec_size, name="Shared_VAE", reuse=tf.AUTO_REUSE)
         cell = tf.contrib.rnn.DropoutWrapper(cell, output_keep_prob=self.keep_prob)
         cell_units.append(cell)
@@ -270,11 +284,12 @@ class D_VAE_NET(object):
         return cell_dec
 
     def buildSampling(self):
+        # sampling layer
         w_mu = self.weight_variable([self.enc_size, self.z_dim], scope_name='Sampling_layer/Shared_VAE', name='w_mu')
         b_mu = self.bias_variable([self.z_dim], scope_name='Sampling_layer/Shared_VAE', name='b_mu')
         w_sigma = self.weight_variable([self.enc_size, self.z_dim], scope_name='Sampling_layer/Shared_VAE', name='w_sigma')
         b_sigma = self.bias_variable([self.z_dim], scope_name='Sampling_layer/Shared_VAE', name='b_sigma')
-
+        # linear layer of decoder
         w_h_dec = self.weight_variable([self.dec_size, self.dim], scope_name='Decoder/Linear/Discrete_VAE', name='w_h_dec')
         b_h_dec = self.bias_variable([self.dim], scope_name='Decoder/Linear/Discrete_VAE', name='b_h_dec')
 
@@ -294,9 +309,9 @@ class D_VAE_NET(object):
 
 class C_GAN_NET(object):
     def __init__(self, batch_size, noise_dim, dim, gen_dim, time_steps,
-                 gen_num_units=128, gen_num_layers=3,
-                 dis_num_units=256, dis_num_layers=1,
-                 keep_prob=0.9, l2_scale=0.001,
+                 gen_num_units, gen_num_layers,
+                 dis_num_units, dis_num_layers,
+                 keep_prob, l2_scale,
                  conditional=False, num_labels=0):
 
         self.batch_size = batch_size
@@ -315,10 +330,12 @@ class C_GAN_NET(object):
 
     def build_GenRNN(self, input_noise, conditions=None):
         if self.conditional:
+            # create input noise for generator
             repeated_encoding = tf.stack([conditions]*self.time_steps, axis=1)
             noise_with_c = tf.concat([input_noise, repeated_encoding], axis=2)
             self.g_input = tf.unstack(noise_with_c, axis=1)
 
+            # create multi-cell lstm layers
             cells_list = []
             for i in range(self.gen_num_layers):
                 g_input_dim = (self.noise_dim + self.num_labels) if i == 0 else self.gen_num_units
@@ -327,8 +344,10 @@ class C_GAN_NET(object):
             self.g_rnn_network = MultilayerCells(cells=cells_list)
 
         else:
+            # create input noise for generator
             self.g_input = tf.unstack(input_noise, axis=1)
 
+            # create multi-cell lstm layers
             cells_list = []
             for i in range(self.gen_num_layers):
                 g_input_dim = self.noise_dim if i == 0 else self.gen_num_units
@@ -336,6 +355,7 @@ class C_GAN_NET(object):
                 cells_list.append(bilstmcell)
             self.g_rnn_network = MultilayerCells(cells=cells_list)
 
+        # create initial states for multi-cell lstm
         initial_state = []
         for i in range(self.gen_num_layers):
             state_ = tf.stack([tf.zeros([self.batch_size, self.gen_num_units]),
@@ -347,7 +367,7 @@ class C_GAN_NET(object):
     def gen_Onestep(self, t, state):
         with tf.variable_scope("Continuous_generator", regularizer=l2_regularizer(self.l2_scale)):
             cell_new_output_, new_state = self.g_rnn_network(input=self.g_input[t], state=state[0], state_=state[1])
-            new_output_linear = tf.layers.dense(inputs=cell_new_output_, units=self.gen_dim, activation=None, reuse=tf.AUTO_REUSE)
+            new_output_linear = tf.layers.dense(inputs=cell_new_output_, units=self.gen_dim, activation=tf.nn.sigmoid, reuse=tf.AUTO_REUSE)
         return new_output_linear, new_state
 
     def build_Discriminator(self, input_discriminator):
@@ -355,7 +375,6 @@ class C_GAN_NET(object):
             cell_units = []
             for num_units in range(self.dis_num_layers):
                 cell = tf.nn.rnn_cell.LSTMCell(self.dis_num_units, reuse=tf.AUTO_REUSE)
-                # cell = tf.nn.rnn_cell.GRUCell(self.gen_num_units, reuse=tf.AUTO_REUSE)
                 cell = tf.contrib.rnn.DropoutWrapper(cell, output_keep_prob=self.keep_prob)
                 cell_units.append(cell)
             d_rnn_network = tf.nn.rnn_cell.MultiRNNCell(cell_units)
@@ -363,20 +382,15 @@ class C_GAN_NET(object):
             initial_state = rnn_init_state(init_="variable", batch_size=self.batch_size,
                                            num_layers=self.dis_num_layers, num_units=self.dis_num_units)
             outputs, _ = tf.nn.static_rnn(cell=d_rnn_network, inputs=input_discriminator, initial_state=initial_state)
-            outputs = tf.stack(outputs, axis=1)
+            outputs = tf.stack(outputs, axis=1) 
 
             result = tf.layers.dense(tf.layers.flatten(outputs), 1, reuse=tf.AUTO_REUSE, activation=None)
-        return result, tf.nn.sigmoid(result), outputs
-
-    def latent_Discriminator(self, input_latent):
-        with tf.variable_scope("Latent_discriminator", regularizer=l2_regularizer(self.l2_scale)):
-            result = tf.layers.dense(tf.layers.flatten(input_latent), 1, reuse=tf.AUTO_REUSE, activation=None)
-        return tf.nn.sigmoid(result)
+        return result, outputs
 
 class D_GAN_NET(object):
     def __init__(self, batch_size, noise_dim, gen_dim, dim, time_steps,
-                 gen_num_units=128, gen_num_layers=3,
-                 dis_num_units=256, dis_num_layers=1, keep_prob=0.8,
+                 gen_num_units, gen_num_layers,
+                 dis_num_units, dis_num_layers, keep_prob, l2_scale,
                  conditional=False, num_labels=0):
         self.batch_size = batch_size
         self.noise_dim = noise_dim
@@ -388,15 +402,18 @@ class D_GAN_NET(object):
         self.dis_num_units = dis_num_units
         self.dis_num_layers = dis_num_layers
         self.keep_prob = keep_prob
+        self.l2_scale = l2_scale
         self.conditional = conditional
         self.num_labels = num_labels
 
     def build_GenRNN(self, input_noise, conditions=None):
         if self.conditional:
+            # create input noise for generator
             repeated_encoding = tf.stack([conditions]*self.time_steps, axis=1)
             noise_with_c = tf.concat([input_noise, repeated_encoding], axis=2)
             self.g_input = tf.unstack(noise_with_c, axis=1)
 
+            # create multi-cell lstm for generator
             cells_list = []
             for i in range(self.gen_num_layers):
                 g_input_dim = (self.noise_dim + self.num_labels) if i == 0 else self.gen_num_units
@@ -405,8 +422,10 @@ class D_GAN_NET(object):
             self.g_rnn_network = MultilayerCells(cells=cells_list)
 
         else:
+            # create input noise for generator
             self.g_input = tf.unstack(input_noise, axis=1)
 
+            # create multi-cell lstm for generator
             cells_list = []
             for i in range(self.gen_num_layers):
                 g_input_dim = self.noise_dim if i == 0 else self.gen_num_units
@@ -414,6 +433,7 @@ class D_GAN_NET(object):
                 cells_list.append(bilstmcell)
             self.g_rnn_network = MultilayerCells(cells=cells_list)
 
+        # initial state for multi-cell lstm
         initial_state = []
         for i in range(self.gen_num_layers):
             state_ = tf.stack([tf.zeros([self.batch_size, self.gen_num_units]),
@@ -423,24 +443,24 @@ class D_GAN_NET(object):
         return initial_state
 
     def gen_Onestep(self, t, state):
-        with tf.variable_scope("Discrete_generator"):
+        with tf.variable_scope("Discrete_generator", regularizer=l2_regularizer(self.l2_scale)):
+            # output is a tuple of (h_i, (h_i, c_i))
             cell_new_output_, new_state = self.g_rnn_network(input=self.g_input[t], state=state[0], state_=state[1])
-            new_output_linear = tf.layers.dense(inputs=cell_new_output_, units=self.gen_dim, activation=None, reuse=tf.AUTO_REUSE)
+            new_output_linear = tf.layers.dense(inputs=cell_new_output_, units=self.gen_dim, activation=tf.nn.sigmoid, reuse=tf.AUTO_REUSE)
             return new_output_linear, new_state
 
     def build_Discriminator(self, input_discriminator):
-        with tf.variable_scope("Discrete_discriminator"):
+        with tf.variable_scope("Discrete_discriminator", regularizer=l2_regularizer(self.l2_scale)):
             cell_units = []
             for num_units in range(self.dis_num_layers):
                 cell = tf.nn.rnn_cell.LSTMCell(self.dis_num_units, reuse=tf.AUTO_REUSE)
                 cell = tf.contrib.rnn.DropoutWrapper(cell, output_keep_prob=self.keep_prob)
                 cell_units.append(cell)
             d_rnn_network  = tf.nn.rnn_cell.MultiRNNCell(cell_units)
-
             # initial_state = d_rnn_network.zero_state(self.batch_size, dtype=tf.float32)
             initial_state = rnn_init_state(init_="variable", batch_size=self.batch_size,
                                            num_layers=self.dis_num_layers, num_units=self.dis_num_units)
             outputs, _ = tf.nn.static_rnn(cell=d_rnn_network, inputs=input_discriminator, initial_state=initial_state)
-            outputs = tf.stack(outputs, axis=1)
-            result = tf.layers.dense(tf.layers.flatten(outputs), 1, reuse=tf.AUTO_REUSE, activation=None)
-        return result, tf.sigmoid(result)
+            outputs = tf.stack(outputs, axis=1) 
+            result = tf.layers.dense(tf.layers.flatten(outputs), 1, reuse=tf.AUTO_REUSE, activation=None) 
+        return result
