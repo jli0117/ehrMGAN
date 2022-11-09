@@ -25,9 +25,9 @@ The code requires
 
 All datasets are publicly available from PhysioNet, and can be downloaded from the following links:
 
-1) [MIMIC-III](https://physionet.org/content/mimiciii/1.4/)
-2) [eICU-CRD](https://physionet.org/content/eicu-crd/2.0/)
-3) [HiRID](https://physionet.org/content/hirid/1.1.1/)
+1) [MIMIC-III (v1.4)](https://physionet.org/content/mimiciii/1.4/)
+2) [eICU-CRD (v2.0)](https://physionet.org/content/eicu-crd/2.0/)
+3) [HiRID (v1.1.1)](https://physionet.org/content/hirid/1.1.1/)
 
 ## Pre-processing
 
